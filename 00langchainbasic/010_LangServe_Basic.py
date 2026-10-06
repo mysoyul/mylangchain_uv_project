@@ -1,3 +1,4 @@
+# python 00langchainbasic\010_LangServe_Basic.py
 # uv add langserve langchain-community fastapi uvicorn sse_starlette
 
 from fastapi import FastAPI
@@ -15,9 +16,16 @@ from typing import Dict, Any
 #load_dotenv(dotenv_path='../.env')
 load_dotenv()
 
-# 환경 변수에서 API 키 가져오기
+# 설정 상수 (필요 시 환경 변수로 변경 가능)
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+MODEL_NAME = "openai/gpt-oss-120b"
+HOST = "127.0.0.1"  # 로컬 전용. 외부 공개 시 인증 추가 후 변경
+PORT = 8000
+
+# 환경 변수에서 API 키 가져오기 (키 값은 로그에 출력하지 않음)
 api_key = os.getenv("GROQ_API_KEY")
-print(api_key[:6])
+if not api_key:
+    raise RuntimeError("GROQ_API_KEY 환경 변수가 설정되지 않았습니다. .env 파일을 확인하세요.")
 
 # 입력 스키마 정의
 class QuestionInput(BaseModel):
@@ -29,8 +37,8 @@ app = FastAPI(title="LangServe API with .env")
 # LLM 모델 생성
 llm = ChatOpenAI(
     api_key=api_key,
-    base_url="https://api.groq.com/openai/v1",
-    model="meta-llama/llama-4-scout-17b-16e-instruct",
+    base_url=GROQ_BASE_URL,
+    model=MODEL_NAME,
     temperature=0
 )
 
@@ -84,4 +92,4 @@ async def health_check():
 
 # FastAPI 서버 실행
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=HOST, port=PORT)
