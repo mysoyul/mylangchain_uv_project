@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-print(OPENAI_API_KEY[:5])
 
 # API 키 검증
 if not OPENAI_API_KEY:
@@ -23,8 +22,6 @@ from langchain_community.vectorstores import FAISS
 
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_classic.chains import create_retrieval_chain
-#from langchain.chains.combine_documents import create_stuff_documents_chain
-#from langchain.chains import create_retrieval_chain
 
 # gradio 인터페이스를 위한 패키지
 from gradio_pdf import PDF
@@ -109,7 +106,6 @@ def retrieve_and_generate_answers(vectorstore, message, temperature=0.5):
         # ChatModel 인스턴스 생성
         model = ChatOpenAI(
             model='gpt-4o-mini', 
-            #model='gpt-3.5-turbo', 
             temperature=float(temperature),
             api_key=OPENAI_API_KEY
         )
