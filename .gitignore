@@ -14,3 +14,6 @@ wheels/
 
 # database folders
 db/
+
+# .gradio
+03ChatBot/.gradio
