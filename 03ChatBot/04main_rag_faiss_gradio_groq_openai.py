@@ -1,13 +1,16 @@
-# python 03ChatBot\04main_rag_faiss_gradio_upstage.py
+# python 03ChatBot\04main_rag_faiss_gradio_groq_openai.py
 
-"""PDF 질의응답(RAG) Gradio 앱: PDF 업로드 -> FAISS 벡터 저장소 -> Upstage Solar 답변.
+"""PDF 질의응답(RAG) Gradio 앱: PDF 업로드 -> FAISS 벡터 저장소 -> Groq/OpenAI 답변.
 
 전체 흐름
-    1. PDF 업로드 + 질문 입력
+    1. PDF 업로드 + 질문 입력 + LLM 제공자(Groq/OpenAI) 선택
     2. PDF를 청크(chunk)로 분할 -> 임베딩 -> FAISS 벡터 저장소 (PDF/분할 설정이 바뀔 때만 수행)
     3. 질문과 유사한 청크 k개 검색(retriever)
-    4. 검색된 청크를 context로 프롬프트에 넣어 LLM이 답변 생성
+    4. 검색된 청크를 context로 프롬프트에 넣어 선택한 LLM이 답변 생성
     5. 답변 + 출처(파일명, 페이지)를 채팅창에 표시
+
+주의: Groq는 임베딩 API가 없으므로, 어떤 제공자를 선택해도 임베딩은 OpenAI를 사용한다.
+      따라서 OPENAI_API_KEY는 항상 필요하고, GROQ_API_KEY는 Groq 선택 시에만 필요하다.
 """
 import os
 from dataclasses import dataclass
@@ -16,8 +19,8 @@ from functools import lru_cache
 import gradio as gr
 from dotenv import load_dotenv
 
-# langchain 패키지
-from langchain_upstage import UpstageEmbeddings, ChatUpstage
+# langchain 패키지 (Groq는 OpenAI 호환 API라서 ChatOpenAI로 연결한다)
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda, RunnableParallel, RunnablePassthrough
@@ -33,10 +36,25 @@ from gradio_pdf import PDF
 # ---------------------------------------------------------------------------
 # 상수
 # ---------------------------------------------------------------------------
-API_KEY_ENV = "UPSTAGE_API_KEY"                 # .env 에서 읽을 환경 변수 이름
-EMBEDDING_MODEL = "solar-embedding-1-large"     # 청크/질문을 벡터로 바꾸는 임베딩 모델
-CHAT_MODEL = "solar-pro3"                       # 답변을 생성하는 LLM
-UPSTAGE_BASE_URL = "https://api.upstage.ai/v1"
+EMBEDDING_API_KEY_ENV = "OPENAI_API_KEY"        # 임베딩은 항상 OpenAI를 사용하므로 필수 키
+EMBEDDING_MODEL = "text-embedding-3-small"      # 청크/질문을 벡터로 바꾸는 임베딩 모델
+
+# 제공자별 LLM 설정 (Groq는 base_url만 다르고, OpenAI는 base_url 생략 시 기본 엔드포인트 사용)
+LLM_CONFIGS = {
+    "groq": {
+        "api_key_env": "GROQ_API_KEY",
+        "base_url": "https://api.groq.com/openai/v1",  # Groq API 엔드포인트
+        "model": "openai/gpt-oss-120b",                # 대안: "moonshotai/kimi-k2-instruct-0905"
+    },
+    "openai": {
+        "api_key_env": "OPENAI_API_KEY",
+        "base_url": None,
+        "model": "gpt-4o-mini",                        # 대안: "gpt-4o"
+    },
+}
+DEFAULT_PROVIDER = "openai"                     # 임베딩 때문에 OpenAI 키는 항상 필요하므로 기본값으로 둔다
+MAX_RETRIES = 5                                 # 503 등 일시 장애 자동 재시도 횟수
+
 SEARCH_K = 6                                    # 질문마다 검색할 청크 개수 (많을수록 문맥↑, 토큰/비용↑)
 SEPARATORS = ["\n\n", "\n", ".", " ", ""]       # 앞쪽 구분자부터 시도해 문단 > 줄 > 문장 > 단어 순으로 자연스럽게 분할
 
@@ -74,13 +92,14 @@ PROMPT = ChatPromptTemplate.from_messages([
 # ---------------------------------------------------------------------------
 # 환경 설정 / 모델 생성
 # ---------------------------------------------------------------------------
-def require_api_key() -> str:
-    """환경 변수에서 API 키를 읽어 검증한다. 키 값은 출력하지 않는다."""
+def require_api_key() -> None:
+    """실행 전 필수 키(OpenAI: 임베딩)를 검증하고, 선택 키(Groq) 설정 여부를 안내한다. 키 값은 출력하지 않는다."""
     load_dotenv()  # .env 파일의 값을 환경 변수로 로드
-    api_key = os.getenv(API_KEY_ENV)
-    if not api_key:
-        raise ValueError(f"{API_KEY_ENV}가 설정되지 않았습니다. .env 파일을 확인해주세요.")
-    return api_key
+    if not os.getenv(EMBEDDING_API_KEY_ENV):
+        raise ValueError(f"{EMBEDDING_API_KEY_ENV}가 설정되지 않았습니다. .env 파일을 확인해주세요. (임베딩에 필수)")
+    for provider, config in LLM_CONFIGS.items():
+        status = "설정됨" if os.getenv(config["api_key_env"]) else "없음 (이 제공자는 선택할 수 없습니다)"
+        print(f"[API 키] {provider}: {config['api_key_env']} {status}")
 
 
 @dataclass
@@ -93,13 +112,25 @@ class RagSession:
 @lru_cache(maxsize=1)
 def get_embeddings():
     """임베딩 모델을 한 번만 생성한다. (호출 때마다 만들 필요가 없으므로 캐시)"""
-    return UpstageEmbeddings(model=EMBEDDING_MODEL)
+    return OpenAIEmbeddings(model=EMBEDDING_MODEL)  # 키는 OPENAI_API_KEY 환경 변수에서 읽는다
 
 
 @lru_cache(maxsize=8)
-def get_llm(temperature: float):
-    """temperature별로 ChatModel을 캐시해 재사용한다. (슬라이더 값이 바뀌어도 같은 값이면 재사용)"""
-    return ChatUpstage(model=CHAT_MODEL, base_url=UPSTAGE_BASE_URL, temperature=temperature)
+def get_llm(provider: str, temperature: float) -> ChatOpenAI:
+    """선택한 제공자(groq/openai)의 ChatOpenAI를 (provider, temperature)별로 캐시해 재사용한다."""
+    if provider not in LLM_CONFIGS:
+        raise ValueError(f"지원하지 않는 제공자: {provider} (사용 가능: {list(LLM_CONFIGS)})")
+    config = LLM_CONFIGS[provider]
+    api_key = os.getenv(config["api_key_env"])
+    if not api_key:
+        raise ValueError(f".env 파일에 {config['api_key_env']}가 없습니다. ({provider} 사용 불가)")
+    return ChatOpenAI(
+        model=config["model"],
+        base_url=config["base_url"],
+        api_key=api_key,
+        temperature=temperature,
+        max_retries=MAX_RETRIES,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +165,7 @@ def load_pdf_to_retriever(pdf_file: str, chunk_size: int, chunk_overlap: int):
     splits = splitter.split_documents(documents)
     print(f"총 {len(splits)}개 청크로 분할됨")
 
-    # 청크를 임베딩해 FAISS에 저장한다. (Upstage 임베딩 API 호출 -> 비용 발생 구간)
+    # 청크를 임베딩해 FAISS에 저장한다. (OpenAI 임베딩 API 호출 -> 비용 발생 구간)
     print("FAISS 벡터 저장소 생성 중...")
     vectorstore = FAISS.from_documents(documents=splits, embedding=get_embeddings())
     print("벡터 저장소 생성 완료!")
@@ -167,13 +198,14 @@ def format_sources(docs) -> str:
     return "\n".join(lines)
 
 
-def generate_answer(retriever, question: str, temperature: float) -> str:
-    """검색 1번으로 얻은 문서를 근거로 답변을 만들고, 출처를 덧붙여 반환한다."""
+def generate_answer(retriever, question: str, provider: str, temperature: float) -> str:
+    """검색 1번으로 얻은 문서를 근거로 답변을 만들고, 출처와 사용 모델을 덧붙여 반환한다."""
+    llm = get_llm(provider, temperature)  # 키가 없으면 여기서 ValueError (검색 전에 실패해 불필요한 임베딩 호출 방지)
     # 답변 체인: {"docs", "question"} -> context 문자열로 변환 -> 프롬프트 -> LLM -> 문자열
     answer_chain = (
         RunnableLambda(lambda x: {"context": format_docs(x["docs"]), "question": x["question"]})
         | PROMPT
-        | get_llm(temperature)
+        | llm
         | StrOutputParser()
     )
     # 같은 질문을 retriever(문서 검색)와 RunnablePassthrough(원본 질문)에 동시에 전달해
@@ -181,16 +213,18 @@ def generate_answer(retriever, question: str, temperature: float) -> str:
     # -> 검색은 1번만 수행하므로 답변과 출처 문서가 항상 일치하고 임베딩 API도 1번만 호출된다.
     chain = RunnableParallel(docs=retriever, question=RunnablePassthrough()).assign(answer=answer_chain)
     result = chain.invoke(question)  # {"docs": [...], "question": "...", "answer": "..."}
-    return f"{result['answer']}\n\n{format_sources(result['docs'])}"
+    model_info = f"(모델: {provider} / {LLM_CONFIGS[provider]['model']})"
+    return f"{result['answer']}\n\n{format_sources(result['docs'])}\n\n{model_info}"
 
 
-def answer_question(question, pdf_file, chunk_size, chunk_overlap, temperature, session):
+def answer_question(question, pdf_file, chunk_size, chunk_overlap, provider, temperature, session):
     """입력을 검증하고 필요하면 벡터 저장소를 만든 뒤 답변한다. (답변 문자열, 갱신된 세션)을 반환."""
     if not pdf_file:
         raise ValueError("PDF 파일을 업로드해주세요.")
     size, overlap = parse_split_options(chunk_size, chunk_overlap)
 
     # PDF 또는 분할 설정이 바뀐 경우에만 벡터 저장소를 다시 만든다. (임베딩 비용/시간 절약)
+    # provider는 키에 넣지 않는다: 임베딩은 제공자와 무관하므로 제공자를 바꿔도 재사용된다.
     key = (pdf_file, size, overlap)
     if session is None or session.key != key:
         print("새로운 PDF/설정 처리 중...")
@@ -198,13 +232,13 @@ def answer_question(question, pdf_file, chunk_size, chunk_overlap, temperature, 
     else:
         print("기존 벡터 저장소 사용")
 
-    return generate_answer(session.retriever, question, float(temperature)), session
+    return generate_answer(session.retriever, question, provider, float(temperature)), session
 
 
 # ---------------------------------------------------------------------------
 # Gradio 이벤트 핸들러 / UI
 # ---------------------------------------------------------------------------
-def respond(message, chat_history, pdf_file, chunk_size, chunk_overlap, temperature, session):
+def respond(message, chat_history, pdf_file, chunk_size, chunk_overlap, provider, temperature, session):
     """질문 처리 이벤트 핸들러. (채팅 기록, 입력창, 세션 상태)를 반환한다.
 
     인자는 UI의 inputs 리스트 순서와 같고, 반환값은 outputs 리스트 순서와 같다.
@@ -213,7 +247,7 @@ def respond(message, chat_history, pdf_file, chunk_size, chunk_overlap, temperat
         return chat_history, "", session  # 빈 질문은 무시
     try:
         bot_message, session = answer_question(
-            message, pdf_file, chunk_size, chunk_overlap, temperature, session
+            message, pdf_file, chunk_size, chunk_overlap, provider, temperature, session
         )
     except Exception as e:  # 검증/API/네트워크 오류를 채팅창에 표시
         print(f"오류: {e}")
@@ -239,9 +273,17 @@ def create_interface():
         session = gr.State(None)
 
         with gr.Row():
-            # 왼쪽: PDF 업로드 + 고급 설정
+            # 왼쪽: PDF 업로드 + LLM 선택 + 고급 설정
             with gr.Column(scale=1):
                 pdf_input = PDF(label="PDF 파일 업로드")  # 값은 업로드된 파일의 경로(str)
+
+                # 답변을 생성할 LLM 제공자 선택 (바꿔도 벡터 저장소는 재사용된다)
+                provider = gr.Radio(
+                    label="LLM 제공자",
+                    choices=list(LLM_CONFIGS),
+                    value=DEFAULT_PROVIDER,
+                    info="Groq/OpenAI 중 답변을 생성할 모델 (임베딩은 항상 OpenAI)",
+                )
 
                 with gr.Accordion("고급 설정", open=False):
                     chunk_size = gr.Number(
@@ -288,7 +330,7 @@ def create_interface():
 
         # 이벤트 연결: inputs의 현재 값이 respond 인자로 순서대로 전달되고,
         # respond의 반환값이 outputs 컴포넌트에 순서대로 들어간다.
-        inputs = [msg, chatbot, pdf_input, chunk_size, chunk_overlap, temperature, session]
+        inputs = [msg, chatbot, pdf_input, chunk_size, chunk_overlap, provider, temperature, session]
         outputs = [chatbot, msg, session]
         submit_btn.click(respond, inputs, outputs)  # 버튼 클릭
         msg.submit(respond, inputs, outputs)        # 입력창에서 Enter
@@ -304,6 +346,6 @@ def create_interface():
 
 # 인터페이스 실행
 if __name__ == "__main__":
-    require_api_key()  # 키가 없으면 UI를 띄우기 전에 바로 중단
+    require_api_key()  # 필수 키가 없으면 UI를 띄우기 전에 바로 중단
     demo = create_interface()
     demo.launch(share=False, server_name=SERVER_NAME)  # share=False: 외부 공개 링크 생성 안 함
