@@ -17,3 +17,9 @@ db/
 
 # .gradio
 03ChatBot/.gradio
+# MCP server log
+mcp_server.log
+
+# gradio
+.gradio/
+flagged*/
