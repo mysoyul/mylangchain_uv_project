@@ -23,3 +23,6 @@ mcp_server.log
 # gradio
 .gradio/
 flagged*/
+
+# pycache
+owasp/secure_modular/__pycache__/
