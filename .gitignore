@@ -26,3 +26,6 @@ flagged*/
 
 # pycache
 owasp/secure_modular/__pycache__/
+
+# owasp old docs
+owasp/*_old

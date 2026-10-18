@@ -1204,6 +1204,19 @@ wheels = [
 ]
 
 [[package]]
+name = "langchain-experimental"
+version = "0.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "langchain-community" },
+    { name = "langchain-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a2/ec/6fe7b2e3c105b4f4fc6b943d8fc1b5b10f883429edc36c58a09fc2e28419/langchain_experimental-0.4.1.tar.gz", hash = "sha256:ab6b19a0b98fbc15225fbfcf096176fec339b7e3e930bcf328bb717985fc1da5", size = 170449, upload-time = "2025-12-11T05:30:48.455Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/24/fa/fb2c8b6418e1c9ef50c82b3b6e0184bce321582577240bb4b8ed3274a4aa/langchain_experimental-0.4.1-py3-none-any.whl", hash = "sha256:b6ee2f42b50aaadb45e581439ecf5ee50f3a6a0986d52e74d1e64721309e387d", size = 210096, upload-time = "2025-12-11T05:30:47.234Z" },
+]
+
+[[package]]
 name = "langchain-google-genai"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1749,6 +1762,7 @@ dependencies = [
     { name = "groq" },
     { name = "langchain" },
     { name = "langchain-community" },
+    { name = "langchain-experimental" },
     { name = "langchain-google-genai" },
     { name = "langchain-huggingface" },
     { name = "langchain-mcp-adapters" },
@@ -1781,6 +1795,7 @@ requires-dist = [
     { name = "groq", specifier = ">=1.7.0" },
     { name = "langchain", specifier = ">=1.2.6" },
     { name = "langchain-community", specifier = ">=0.4.1" },
+    { name = "langchain-experimental", specifier = ">=0.4.1" },
     { name = "langchain-google-genai", specifier = ">=4.2.0" },
     { name = "langchain-huggingface", specifier = ">=1.2.0" },
     { name = "langchain-mcp-adapters", specifier = ">=0.2.2" },

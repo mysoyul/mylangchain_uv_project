@@ -13,6 +13,7 @@ dependencies = [
     "groq>=1.7.0",
     "langchain>=1.2.6",
     "langchain-community>=0.4.1",
+    "langchain-experimental>=0.4.1",
     "langchain-google-genai>=4.2.0",
     "langchain-huggingface>=1.2.0",
     "langchain-mcp-adapters>=0.2.2",
